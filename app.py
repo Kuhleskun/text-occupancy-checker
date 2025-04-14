@@ -72,7 +72,7 @@ def draw_overlay(image, occupied_cells, excluded_cells):
             cv2.putText(vis, cell_id, (x+4, y+15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
     return cv2.addWeighted(overlay, 0.5, vis, 0.5, 0)
 
-# === 行ベースでチェックボックスに並べる ===
+# === 行ごとに並べて左詰め ===
 def group_cells_by_row(cells):
     row_dict = {str(r): [] for r in range(1, GRID_SIZE + 1)}
     for cell in sorted(cells, key=lambda x: (int(x.split('-')[0]), int(x.split('-')[1]))):
@@ -80,31 +80,35 @@ def group_cells_by_row(cells):
         row_dict[row].append(cell)
     return list(row_dict.values())
 
-# === アップロード処理 ===
+# === メイン処理 ===
 uploaded = st.file_uploader("画像をアップロードしてください", type=["jpg", "png", "jpeg"])
 if uploaded:
     image, boxes, detected_cells = process_image(uploaded)
 
+    # セッション初期化
+    if "excluded" not in st.session_state:
+        st.session_state["excluded"] = set()
+    temp_excluded = set()
+
+    # UI
     col1, col2 = st.columns([1.3, 1])
     with col2:
         st.markdown("### 🛠️ 除外マスを選択")
-        excluded_cells = []
         grouped_by_row = group_cells_by_row(detected_cells)
-
-        excluded_cells = []
         for row_cells in grouped_by_row:
             if row_cells:
-                # ★ gap="small" を追加 ★
-                cols = st.columns(len(row_cells), gap="small")
-        
+                cols = st.columns(len(row_cells))
                 for idx, cell in enumerate(row_cells):
                     with cols[idx]:
-                        if st.checkbox(cell, key=cell):
-                            excluded_cells.append(cell)
+                        if st.checkbox(cell, key=f"temp_{cell}"):
+                            temp_excluded.add(cell)
 
+        if st.button("✅ 除外マスを反映する"):
+            st.session_state["excluded"] = temp_excluded
 
     with col1:
-        final_cells = set(detected_cells) - set(excluded_cells)
+        excluded_cells = st.session_state["excluded"]
+        final_cells = set(detected_cells) - excluded_cells
         ratio = round(len(final_cells) / (GRID_SIZE * GRID_SIZE) * 100)
         status = "⭕️ 合格" if ratio <= 20 else ("▲ 注意" if ratio <= 30 else "❌ 不合格")
 

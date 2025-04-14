@@ -78,39 +78,51 @@ def group_cells_by_row(cells):
     for cell in sorted(cells, key=lambda x: (int(x.split('-')[0]), int(x.split('-')[1]))):
         row, _ = cell.split('-')
         row_dict[row].append(cell)
-    return list(row_dict.values())
 
-# === メイン処理 ===
+    # 空欄ありの行ベース（左詰め）レイアウトを生成
+    max_len = max(len(v) for v in row_dict.values())
+    rows = []
+    for i in range(GRID_SIZE):
+        row_cells = row_dict[str(i+1)]
+        padded = row_cells + [''] * (max_len - len(row_cells))
+        rows.append(padded)
+    return rows
+
+# === アップロード処理 ===
 uploaded = st.file_uploader("画像をアップロードしてください", type=["jpg", "png", "jpeg"])
+
 if uploaded:
     image, boxes, detected_cells = process_image(uploaded)
-    excluded_cells = []
+
+    # 青マスのみチェック対象
+    grouped_rows = group_cells_by_row(detected_cells)
 
     col1, col2 = st.columns([1.3, 1])
-    with col2:
-        st.markdown("### 🛠️ 除外マスを選択")
-        with st.form("exclude_form"):
-            selected = {}
-            grouped = group_cells_by_row(detected_cells)
-            for row_cells in grouped:
-                if row_cells:
-                    cols = st.columns(len(row_cells))
-                    for idx, cell in enumerate(row_cells):
-                        with cols[idx]:
-                            selected[cell] = st.checkbox(cell, key=cell)
-
-            submitted = st.form_submit_button("反映")
 
     with col1:
-        if submitted:
-            excluded_cells = [cell for cell, checked in selected.items() if checked]
-            final_cells = set(detected_cells) - set(excluded_cells)
-            ratio = round(len(final_cells) / (GRID_SIZE * GRID_SIZE) * 100)
-            status = "⭕️ 合格" if ratio <= 20 else ("▲ 注意" if ratio <= 30 else "❌ 不合格")
+        st.image(image, caption="アップロード画像（判定前）", use_container_width=True)
 
-            st.markdown(f"### 📊 テキスト占有率： {ratio}%")
-            st.markdown(f"### 📝 最終判定結果： {status}")
-            overlay_img = draw_overlay(image, detected_cells, excluded_cells)
-            st.image(overlay_img, caption="OCR + セルマップ", use_container_width=True)
+    with col2:
+        st.markdown("### 🔧 除外マスを選択")
+        with st.form("exclude_form"):
+            excluded_cells = []
+            for row_cells in grouped_rows:
+                cols = st.columns(len(row_cells))
+                for idx, cell in enumerate(row_cells):
+                    if cell:  # 空欄は表示しない
+                        with cols[idx]:
+                            if st.checkbox(cell, key=cell):
+                                excluded_cells.append(cell)
+            submitted = st.form_submit_button("🔁 反映")
 
-            st.markdown(f"**カウント対象マス一覧**： {sorted(list(final_cells))}")
+    if submitted:
+        final_cells = set(detected_cells) - set(excluded_cells)
+        ratio = round(len(final_cells) / (GRID_SIZE * GRID_SIZE) * 100)
+        status = "⭕️ 合格" if ratio <= 20 else ("▲ 注意" if ratio <= 30 else "❌ 不合格")
+
+        overlay_img = draw_overlay(image, detected_cells, excluded_cells)
+
+        st.markdown(f"### 📊 テキスト占有率： {ratio}%")
+        st.markdown(f"### 📝 最終判定結果： {status}")
+        st.image(overlay_img, caption="判定結果", use_container_width=True)
+        st.markdown(f"**カウント対象マス一覧**： {sorted(list(final_cells))}")

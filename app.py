@@ -72,7 +72,7 @@ def draw_overlay(image, occupied_cells, excluded_cells):
             cv2.putText(vis, cell_id, (x+4, y+15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
     return cv2.addWeighted(overlay, 0.5, vis, 0.5, 0)
 
-# === 行ごとに並べて左詰め ===
+# === 行ベースでチェックボックスに並べる（左詰め）===
 def group_cells_by_row(cells):
     row_dict = {str(r): [] for r in range(1, GRID_SIZE + 1)}
     for cell in sorted(cells, key=lambda x: (int(x.split('-')[0]), int(x.split('-')[1]))):
@@ -84,37 +84,33 @@ def group_cells_by_row(cells):
 uploaded = st.file_uploader("画像をアップロードしてください", type=["jpg", "png", "jpeg"])
 if uploaded:
     image, boxes, detected_cells = process_image(uploaded)
+    excluded_cells = []
 
-    # セッション初期化
-    if "excluded" not in st.session_state:
-        st.session_state["excluded"] = set()
-    temp_excluded = set()
-
-    # UI
     col1, col2 = st.columns([1.3, 1])
     with col2:
         st.markdown("### 🛠️ 除外マスを選択")
-        grouped_by_row = group_cells_by_row(detected_cells)
-        for row_cells in grouped_by_row:
-            if row_cells:
-                cols = st.columns(len(row_cells))
-                for idx, cell in enumerate(row_cells):
-                    with cols[idx]:
-                        if st.checkbox(cell, key=f"temp_{cell}"):
-                            temp_excluded.add(cell)
+        with st.form("exclude_form"):
+            selected = {}
+            grouped = group_cells_by_row(detected_cells)
+            for row_cells in grouped:
+                if row_cells:
+                    cols = st.columns(len(row_cells))
+                    for idx, cell in enumerate(row_cells):
+                        with cols[idx]:
+                            selected[cell] = st.checkbox(cell, key=cell)
 
-        if st.button("✅ 除外マスを反映する"):
-            st.session_state["excluded"] = temp_excluded
+            submitted = st.form_submit_button("反映")
 
     with col1:
-        excluded_cells = st.session_state["excluded"]
-        final_cells = set(detected_cells) - excluded_cells
-        ratio = round(len(final_cells) / (GRID_SIZE * GRID_SIZE) * 100)
-        status = "⭕️ 合格" if ratio <= 20 else ("▲ 注意" if ratio <= 30 else "❌ 不合格")
+        if submitted:
+            excluded_cells = [cell for cell, checked in selected.items() if checked]
+            final_cells = set(detected_cells) - set(excluded_cells)
+            ratio = round(len(final_cells) / (GRID_SIZE * GRID_SIZE) * 100)
+            status = "⭕️ 合格" if ratio <= 20 else ("▲ 注意" if ratio <= 30 else "❌ 不合格")
 
-        st.markdown(f"### 📊 テキスト占有率： {ratio}%")
-        st.markdown(f"### 📝 最終判定結果： {status}")
-        overlay_img = draw_overlay(image, detected_cells, excluded_cells)
-        st.image(overlay_img, caption="OCR + セルマップ", use_container_width=True)
+            st.markdown(f"### 📊 テキスト占有率： {ratio}%")
+            st.markdown(f"### 📝 最終判定結果： {status}")
+            overlay_img = draw_overlay(image, detected_cells, excluded_cells)
+            st.image(overlay_img, caption="OCR + セルマップ", use_container_width=True)
 
-    st.markdown(f"**カウント対象マス一覧**： {sorted(list(final_cells))}")
+            st.markdown(f"**カウント対象マス一覧**： {sorted(list(final_cells))}")

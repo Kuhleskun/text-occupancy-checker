@@ -12,7 +12,7 @@ IMAGE_SIZE = 800
 OCCUPANCY_THRESHOLD = 0.05
 
 st.set_page_config(layout="wide")
-st.title("📏 テキスト占有率チェッカー（反映一発版）")
+st.title("📏 テキスト占有率チェッカー（var.250415）")
 
 # --- ファイルアップローダー用キーの初期化 ---
 if "uploader_key" not in st.session_state:

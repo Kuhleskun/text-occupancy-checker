@@ -6,7 +6,7 @@ from PIL import Image
 import random
 import io
 
-# === rembg (U²‑NetP ONNX 内蔵) ===
+# === rembg (ONNX 7 MB, 外部 DL 不要) ===
 from rembg import remove
 
 # === 定数 ===
@@ -14,10 +14,10 @@ GRID_SIZE = 10
 CELL_SIZE = 80
 IMAGE_SIZE = 800
 OCCUPANCY_THRESHOLD = 0.05
-PACKAGE_TEXT_THRESHOLD = 0.80  # マスク内率 80% 以上ならパッケージ文字とみなす
+PACKAGE_TEXT_THRESHOLD = 0.80  # マスク内率 80%以上 → パッケージ文字とみなす
 
 st.set_page_config(layout="wide")
-st.title("📏 テキスト占有率チェッカー（var.250415 + mask_onnx）")
+st.title("📏 テキスト占有率チェッカー（var.250415 + mask_onnx_fix）")
 
 # --- ファイルアップローダー用キーの初期化 ---
 if "uploader_key" not in st.session_state:
@@ -26,13 +26,13 @@ if "uploader_key" not in st.session_state:
 # --- OCR 初期化 ---
 @st.cache_resource
 def load_reader():
-    return easyocr.Reader(['ja'], gpu=False, recog_network='japanese_g2')
+    return easyocr.Reader(["ja"], gpu=False, recog_network="japanese_g2")
 
 reader = load_reader()
 
-# === 商品マスク生成 (rembg 利用・外部 DL 不要) ===
+# === 商品マスク生成 (rembg 利用) ===
 
-def get_product_mask(pil_img):
+def get_product_mask(pil_img: Image.Image) -> np.ndarray:
     """rembg で前景マスク (0/1 ndarray) を取得"""
     buf = io.BytesIO()
     pil_img.save(buf, format="PNG")
@@ -40,7 +40,6 @@ def get_product_mask(pil_img):
     mask_img = Image.open(io.BytesIO(mask_bytes)).convert("L")
     mask_img = mask_img.resize((IMAGE_SIZE, IMAGE_SIZE), Image.BILINEAR)
     mask = (np.array(mask_img) > 128).astype(np.uint8)
-    # 小さな穴を閉じる
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     return mask
 
@@ -70,8 +69,8 @@ def get_all_cells():
 
 def group_cells_by_row(cells):
     d = {str(r): [] for r in range(1, GRID_SIZE + 1)}
-    for c in sorted(cells, key=lambda x: (int(x.split('-')[0]), int(x.split('-')[1]))):
-        r, _ = c.split('-')
+    for c in sorted(cells, key=lambda x: (int(x.split("-")[0]), int(x.split("-")[1]))):
+        r, _ = c.split("-")
         d[r].append(c)
     return list(d.values())
 
@@ -80,7 +79,6 @@ def group_cells_by_row(cells):
 def draw_overlay(img, occupied, target, excluded, mask=None):
     vis = np.array(img).copy()
     overlay = vis.copy()
-    # 商品マスク輪郭
     if mask is not None:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(vis, contours, -1, (255, 255, 255), 2)
@@ -152,7 +150,7 @@ if st.session_state.get("uploaded") and st.session_state.get("image_data") is No
 
         region = product_mask[y1:y2, x1:x2]
         if region.size > 0 and region.mean() >= PACKAGE_TEXT_THRESHOLD:
-            continue  # パッケージ文字なのでスキップ
+            continue  # パッケージ文字
 
         occ |= get_cells_from_box(x1, y1, x2, y2)
 
@@ -188,17 +186,6 @@ if img_data is not None:
             mask=st.session_state.get("product_mask"),
         )
         st.image(overlay_img, caption="OCR + セルマップ", width=int(IMAGE_SIZE * 0.8))
+
     with col2:
-        st.markdown("### 🛠️ 除外マスを選択")
-        with st.form("form_exclusion"):
-            if "temp_excluded" not in st.session_state:
-                st.session_state["temp_excluded"] = list(st.session_state.get("excluded_cells", []))
-            for row_cells in group_cells_by_row(st.session_state.get("occupied_cells", [])):
-                if not row_cells:
-                    continue
-                with st.container():
-                    cols = st.columns([0.1] * len(row_cells), gap="small")
-                    for i, cid in enumerate(row_cells):
-                        with cols[i]:
-                            checked = cid in st.session_state["temp_excluded"]
-                            val = st.checkbox(cid, value=checked, key=f"exclude
+        # ===== 除

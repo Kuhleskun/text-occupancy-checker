@@ -180,11 +180,11 @@ if img_data is not None:
         ratio = round(len(final_cells))  # 100 セル固定なので count==%
         status = "⭕️ 合格" if ratio <= 20 else ("▲ 注意" if ratio <= 30 else "❌ 不合格")
 
-                st.markdown(f"📊 **テキスト占有率: {ratio}%**  {status}")
-
+        st.markdown(f"📊 **テキスト占有率: {ratio}%**  {status}")
         if st.button("🔄 リセット"):
             reset_image()
             st.stop()
+
 
         overlay = draw_overlay(
             img_data,

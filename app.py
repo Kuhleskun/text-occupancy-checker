@@ -8,6 +8,9 @@ from pathlib import Path
 import torch
 from torchvision import transforms
 
+# ★ ここで最初に呼ぶ
+st.set_page_config(layout="wide")
+
 """
 Torch‑based U²‑NetP で商品領域マスクを取得し、
 パッケージ文字を除外してテキスト占有率を計算するアプリ。

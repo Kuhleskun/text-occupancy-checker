@@ -5,19 +5,28 @@ import cv2
 from PIL import Image
 import random
 
-# === ★追加：U²‑Net 依存ライブラリ ===
+# === ★追加：U²‑NetP 関連 ===
+import os, zipfile
+from pathlib import Path
 import torch
 from torchvision import transforms
+import gdown
 
 # === 定数 ===
 GRID_SIZE = 10
 CELL_SIZE = 80
 IMAGE_SIZE = 800
 OCCUPANCY_THRESHOLD = 0.05
-PACKAGE_TEXT_THRESHOLD = 0.80          # ★追加：マスク内率 80% 以上なら除外
+PACKAGE_TEXT_THRESHOLD = 0.80          # マスク内率 80% 以上ならパッケージ文字とみなす
+
+# === ★追加：U²‑NetP ダウンロード先 ===
+MODEL_DIR   = Path(__file__).parent / "models"
+MODEL_DIR.mkdir(exist_ok=True)
+U2NETP_PATH = MODEL_DIR / "u2netp.pth"
+U2NETP_URL  = "https://drive.google.com/uc?id=1rbSTGKAE-MTxBYHd-51l2hMOQPT_7EPy"
 
 st.set_page_config(layout="wide")
-st.title("📏 テキスト占有率チェッカー（var.250415 + mask1）")
+st.title("📏 テキスト占有率チェッカー（var.250415 + mask2）")
 
 # --- ファイルアップローダー用キーの初期化 ---
 if "uploader_key" not in st.session_state:
@@ -29,14 +38,30 @@ def load_reader():
     return easyocr.Reader(['ja'], gpu=False, recog_network='japanese_g2')
 reader = load_reader()
 
-# === ★追加：U²‑Net モデルロード ===
+# === ★修正：U²‑NetP をローカルに展開してロード ===
 @st.cache_resource
 def load_u2net():
-    model = torch.hub.load("NathanUA/U-2-Net", "u2net", pretrained=True, trust_repo=True)
+    # 1) 重みがなければダウンロード（4.7 MB）
+    if not U2NETP_PATH.exists():
+        gdown.download(U2NETP_URL, str(U2NETP_PATH), quiet=False)
+
+    # 2) hubconf をローカル展開
+    repo = MODEL_DIR / "U-2-Net"
+    if not repo.exists():
+        zip_path = MODEL_DIR / "u2net.zip"
+        torch.hub.download_url_to_file(
+            "https://github.com/NathanUA/U-2-Net/archive/refs/heads/master.zip",
+            str(zip_path))
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(MODEL_DIR)
+
+    # 3) モデル読み込み（ローカル）
+    model = torch.hub.load(str(repo), "u2netp", pretrained=False, source='local')
+    model.load_state_dict(torch.load(U2NETP_PATH, map_location='cpu'))
     model.eval()
     return model
 
-# === ★追加：商品マスク取得 ===
+# === ★追加：商品マスク生成 ===
 def get_product_mask(pil_img):
     model = load_u2net()
     tr = transforms.Compose([
@@ -49,9 +74,8 @@ def get_product_mask(pil_img):
         pred = model(inp)[0][0]
     mask = (pred.sigmoid().cpu().numpy() > 0.5).astype(np.uint8)
     mask = cv2.resize(mask, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR)
-    # 小さな穴を閉じる
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3,3), np.uint8))
-    return mask   # 0/1 マスク
+    return mask  # 0/1 マスク
 
 # --- OCR バウンディングボックスとセルの重なり判定 ---
 def get_cells_from_box(x1, y1, x2, y2, threshold=OCCUPANCY_THRESHOLD):
@@ -82,13 +106,14 @@ def group_cells_by_row(cells):
     return list(d.values())
 
 # --- オーバーレイ描画 ---
-def draw_overlay(img, occupied, target, excluded, mask=None):  # ★変更：mask 引数追加
+def draw_overlay(img, occupied, target, excluded, mask=None):
     vis = np.array(img).copy()
     overlay = vis.copy()
-    # ★追加：商品マスク輪郭を白線で描画（視認用、不要なら削除可）
+    # ★追加：商品マスク輪郭
     if mask is not None:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(vis, contours, -1, (255, 255, 255), 2)
+
     for row in range(GRID_SIZE):
         for col in range(GRID_SIZE):
             x, y = col * CELL_SIZE, row * CELL_SIZE
@@ -107,20 +132,18 @@ def draw_overlay(img, occupied, target, excluded, mask=None):  # ★変更：mas
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
     return cv2.addWeighted(overlay, 0.5, vis, 0.5, 0)
 
-# --- コールバック：除外マス反映 ---
+# --- コールバック ---
 def apply_excluded():
     st.session_state["excluded_cells"] = st.session_state.get("temp_excluded", [])
 
-# --- コールバック：対象マス反映 ---
 def apply_target():
     st.session_state["target_cells"] = st.session_state.get("temp_target", [])
 
 # --- リセット処理 ---
 def reset_image():
-    for key in ["uploaded", "image_data", "product_mask", "occupied_cells", "excluded_cells",
-                "temp_excluded", "target_cells", "temp_target"]:
-        if key in st.session_state:
-            del st.session_state[key]
+    for key in ["uploaded", "image_data", "product_mask", "occupied_cells",
+                "excluded_cells", "temp_excluded", "target_cells", "temp_target"]:
+        st.session_state.pop(key, None)
     st.session_state["uploader_key"] += 1
     st.set_query_params(dummy=str(random.randint(0, 100000)))
 
@@ -136,8 +159,7 @@ if uploaded:
 # --- 画像アップロード＆OCR処理（初回のみ） ---
 if st.session_state.get("uploaded") and st.session_state.get("image_data") is None:
     img = Image.open(st.session_state["uploaded"]).convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE))
-    # ★追加：商品マスク生成
-    product_mask = get_product_mask(img)
+    product_mask = get_product_mask(img)            # ★追加
     arr = np.array(img)
     results = reader.readtext(arr)
 
@@ -148,15 +170,15 @@ if st.session_state.get("uploaded") and st.session_state.get("image_data") is No
         x1, y1 = int(bbox[0][0]), int(bbox[0][1])
         x2, y2 = int(bbox[2][0]), int(bbox[2][1])
 
-        # ★追加：パッケージ文字判定
+        # ★追加：パッケージ文字フィルタ
         region = product_mask[y1:y2, x1:x2]
         if region.size > 0 and region.mean() >= PACKAGE_TEXT_THRESHOLD:
-            continue  # パッケージ文字なので除外
+            continue  # パッケージ文字なのでスキップ
 
         occ |= get_cells_from_box(x1, y1, x2, y2)
 
     st.session_state["image_data"] = img
-    st.session_state["product_mask"] = product_mask  # ★追加
+    st.session_state["product_mask"] = product_mask
     st.session_state["occupied_cells"] = sorted(occ)
     st.session_state["excluded_cells"] = []
     st.session_state["target_cells"] = []
@@ -184,11 +206,11 @@ if img_data is not None:
             st.session_state.get("occupied_cells", []),
             st.session_state.get("target_cells", []),
             st.session_state.get("excluded_cells", []),
-            mask=st.session_state.get("product_mask")  # ★追加
+            mask=st.session_state.get("product_mask")
         )
         st.image(overlay_img, caption="OCR + セルマップ", width=int(IMAGE_SIZE * 0.8))
     with col2:
-        # ===== 除外マスを選択（フォーム） =====
+        # ===== 除外マス =====
         st.markdown("### 🛠️ 除外マスを選択")
         with st.form("form_exclusion"):
             if "temp_excluded" not in st.session_state:
@@ -202,15 +224,14 @@ if img_data is not None:
                         with cols[i]:
                             checked = cid in st.session_state.get("temp_excluded", [])
                             val = st.checkbox(cid, value=checked, key=f"exclude_{cid}")
-                            if val and cid not in st.session_state.get("temp_excluded", []):
+                            if val and cid not in st.session_state["temp_excluded"]:
                                 st.session_state["temp_excluded"].append(cid)
-                            elif not val and cid in st.session_state.get("temp_excluded", []):
+                            elif not val and cid in st.session_state["temp_excluded"]:
                                 st.session_state["temp_excluded"].remove(cid)
-            submit_exclusion = st.form_submit_button("🔄 除外反映")
-            if submit_exclusion:
+            if st.form_submit_button("🔄 除外反映"):
                 apply_excluded()
         st.markdown("---")
-        # ===== 対象マスを選択（フォーム） =====
+        # ===== 対象マス =====
         st.markdown("### 🛠️ 対象マスを選択")
         all_cells = get_all_cells()
         candidate_cells = sorted(all_cells - set(st.session_state.get("occupied_cells", [])))
@@ -224,14 +245,13 @@ if img_data is not None:
                     cols = st.columns([0.1] * len(row_cells), gap="small")
                     for i, cid in enumerate(row_cells):
                         with cols[i]:
-                            checked = cid in st.session_state.get("temp_target", [])
+                            checked = cid in st.session_state["temp_target"]
                             val = st.checkbox(cid, value=checked, key=f"target_{cid}")
-                            if val and cid not in st.session_state.get("temp_target", []):
+                            if val and cid not in st.session_state["temp_target"]:
                                 st.session_state["temp_target"].append(cid)
-                            elif not val and cid in st.session_state.get("temp_target", []):
+                            elif not val and cid in st.session_state["temp_target"]:
                                 st.session_state["temp_target"].remove(cid)
-            submit_target = st.form_submit_button("🔄 対象反映")
-            if submit_target:
+            if st.form_submit_button("🔄 対象反映"):
                 apply_target()
 else:
     st.info("画像がアップロードされていません。")

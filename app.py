@@ -4,13 +4,10 @@ import numpy as np
 import cv2
 from PIL import Image
 import random
+import io
 
-# === U²‑NetP 関連 ===
-import os
-import zipfile
-from pathlib import Path
-import torch
-from torchvision import transforms
+# === rembg (U²‑NetP ONNX 内蔵) ===
+from rembg import remove
 
 # === 定数 ===
 GRID_SIZE = 10
@@ -19,16 +16,8 @@ IMAGE_SIZE = 800
 OCCUPANCY_THRESHOLD = 0.05
 PACKAGE_TEXT_THRESHOLD = 0.80  # マスク内率 80% 以上ならパッケージ文字とみなす
 
-# --- モデルファイルと URL
-MODEL_DIR = Path(__file__).parent / "models"
-MODEL_DIR.mkdir(exist_ok=True)
-U2NETP_PATH = MODEL_DIR / "u2netp.pth"
-GD_URL = "https://drive.google.com/uc?id=1rbSTGKAE-MTxBYHd-51l2hMOQPT_7EPy"
-GH_URL = "https://github.com/xuebinqin/U-2-Net/releases/download/v1.0/u2netp.pth"
-REPO_ZIP_URL = "https://github.com/NathanUA/U-2-Net/archive/refs/heads/master.zip"
-
 st.set_page_config(layout="wide")
-st.title("📏 テキスト占有率チェッカー（var.250415 + mask3）")
+st.title("📏 テキスト占有率チェッカー（var.250415 + mask_onnx）")
 
 # --- ファイルアップローダー用キーの初期化 ---
 if "uploader_key" not in st.session_state:
@@ -41,53 +30,19 @@ def load_reader():
 
 reader = load_reader()
 
-# === U²‑NetP ダウンロードとロード ===
-
-def ensure_u2netp(path: Path):
-    """重みファイルが無ければダウンロード（gdown→GitHub フォールバック）"""
-    if path.exists():
-        return
-    try:
-        import gdown  # type: ignore
-        gdown.download(GD_URL, str(path), quiet=False)
-    except ModuleNotFoundError:
-        # gdown が無い場合は GitHub Release から取得
-        torch.hub.download_url_to_file(GH_URL, str(path))
-    except Exception as e:
-        raise RuntimeError("U²‑NetP のダウンロードに失敗しました") from e
-
-@st.cache_resource
-def load_u2net():
-    ensure_u2netp(U2NETP_PATH)
-
-    repo = MODEL_DIR / "U-2-Net"
-    if not repo.exists():
-        zip_path = MODEL_DIR / "u2net.zip"
-        torch.hub.download_url_to_file(REPO_ZIP_URL, str(zip_path))
-        with zipfile.ZipFile(zip_path) as z:
-            z.extractall(MODEL_DIR)
-
-    model = torch.hub.load(str(repo), "u2netp", pretrained=False, source='local')
-    model.load_state_dict(torch.load(U2NETP_PATH, map_location='cpu'))
-    model.eval()
-    return model
-
-# === 商品マスク生成 ===
+# === 商品マスク生成 (rembg 利用・外部 DL 不要) ===
 
 def get_product_mask(pil_img):
-    model = load_u2net()
-    tr = transforms.Compose([
-        transforms.Resize((320, 320)),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5] * 3, [0.5] * 3)
-    ])
-    inp = tr(pil_img).unsqueeze(0)
-    with torch.no_grad():
-        pred = model(inp)[0][0]
-    mask = (pred.sigmoid().cpu().numpy() > 0.5).astype(np.uint8)
-    mask = cv2.resize(mask, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR)
+    """rembg で前景マスク (0/1 ndarray) を取得"""
+    buf = io.BytesIO()
+    pil_img.save(buf, format="PNG")
+    mask_bytes = remove(buf.getvalue(), only_mask=True)
+    mask_img = Image.open(io.BytesIO(mask_bytes)).convert("L")
+    mask_img = mask_img.resize((IMAGE_SIZE, IMAGE_SIZE), Image.BILINEAR)
+    mask = (np.array(mask_img) > 128).astype(np.uint8)
+    # 小さな穴を閉じる
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-    return mask  # 0/1 マスク
+    return mask
 
 # --- OCR バウンディングボックスとセルの重なり判定 ---
 
@@ -246,35 +201,4 @@ if img_data is not None:
                     for i, cid in enumerate(row_cells):
                         with cols[i]:
                             checked = cid in st.session_state["temp_excluded"]
-                            val = st.checkbox(cid, value=checked, key=f"exclude_{cid}")
-                            if val and cid not in st.session_state["temp_excluded"]:
-                                st.session_state["temp_excluded"].append(cid)
-                            elif not val and cid in st.session_state["temp_excluded"]:
-                                st.session_state["temp_excluded"].remove(cid)
-            if st.form_submit_button("🔄 除外反映"):
-                apply_excluded()
-
-        st.markdown("---")
-        st.markdown("### 🛠️ 対象マスを選択")
-        all_cells = get_all_cells()
-        candidate_cells = sorted(all_cells - set(st.session_state.get("occupied_cells", [])))
-        if "temp_target" not in st.session_state:
-            st.session_state["temp_target"] = list(st.session_state.get("target_cells", []))
-        with st.form("form_target"):
-            for row_cells in group_cells_by_row(candidate_cells):
-                if not row_cells:
-                    continue
-                with st.container():
-                    cols = st.columns([0.1] * len(row_cells), gap="small")
-                    for i, cid in enumerate(row_cells):
-                        with cols[i]:
-                            checked = cid in st.session_state["temp_target"]
-                            val = st.checkbox(cid, value=checked, key=f"target_{cid}")
-                            if val and cid not in st.session_state["temp_target"]:
-                                st.session_state["temp_target"].append(cid)
-                            elif not val and cid in st.session_state["temp_target"]:
-                                st.session_state["temp_target"].remove(cid)
-            if st.form_submit_button("🔄 対象反映"):
-                apply_target()
-else:
-    st.info("画像がアップロードされていません。")
+                            val = st.checkbox(cid, value=checked, key=f"exclude

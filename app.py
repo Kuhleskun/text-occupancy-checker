@@ -4,18 +4,28 @@ import numpy as np
 import cv2
 from PIL import Image
 import random
-import io
-from rembg import remove
+from pathlib import Path
+import torch
+from torchvision import transforms
+
+"""
+Torch‑based U²‑NetP で商品領域マスクを取得し、
+パッケージ文字を除外してテキスト占有率を計算するアプリ。
+依存追加なし（torch は easyocr が導入）
+外部ダウンロードなし：`models/u2netp.pth` を同梱しておく
+UI／レイアウトは従来通り
+"""
 
 # -------------------- 定数 --------------------
-GRID_SIZE = 10          # 10×10 グリッド
-CELL_SIZE = 80          # 1 セル 80 px
-IMAGE_SIZE = 800        # 処理用画像サイズ
-OCCUPANCY_THRESHOLD = 0.05  # バウンディングボックスがセルに 5 % 以上重なれば占有
-PACKAGE_TEXT_THRESHOLD = 0.80  # bbox の 80 % 以上が商品マスク内ならパッケージ文字
+GRID_SIZE = 10
+CELL_SIZE = 80
+IMAGE_SIZE = 800
+OCCUPANCY_THRESHOLD = 0.05      # 文字 bbox がセルに 5% 以上重なれば占有
+PACKAGE_TEXT_THRESHOLD = 0.80   # bbox の 80%以上が商品マスク内ならパッケージ文字
+MODEL_PATH = Path(__file__).parent / "models" / "u2netp.pth"  # 4.7 MB 重み
 
 st.set_page_config(layout="wide")
-st.title("📏 テキスト占有率チェッカー（rembg 版・最終）")
+st.title("📏 テキスト占有率チェッカー（Torch U²‑NetP 完全版）")
 
 # -------------------- OCR リーダ --------------------
 @st.cache_resource
@@ -24,16 +34,31 @@ def load_reader():
 
 reader = load_reader()
 
+# -------------------- U²‑NetP ロード --------------------
+@st.cache_resource
+def load_u2netp():
+    if not MODEL_PATH.exists():
+        st.error("u2netp.pth が models/ フォルダにありません。")
+        st.stop()
+    model = torch.hub.load("NathanUA/U-2-Net", "u2netp", pretrained=False)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    model.eval()
+    return model
+
 # -------------------- 商品マスク --------------------
 
 def get_product_mask(pil_img: Image.Image) -> np.ndarray:
-    """rembg で前景マスク (0/1 ndarray) を取得"""
-    buf = io.BytesIO()
-    pil_img.save(buf, format="PNG")
-    mask_bytes = remove(buf.getvalue(), only_mask=True)
-    mask_img = Image.open(io.BytesIO(mask_bytes)).convert("L")
-    mask_img = mask_img.resize((IMAGE_SIZE, IMAGE_SIZE), Image.BILINEAR)
-    mask = (np.array(mask_img) > 128).astype(np.uint8)
+    model = load_u2netp()
+    tr = transforms.Compose([
+        transforms.Resize((320, 320)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+    ])
+    inp = tr(pil_img).unsqueeze(0)
+    with torch.no_grad():
+        pred = model(inp)[0][0]
+    mask = (pred.sigmoid().cpu().numpy() > 0.5).astype(np.uint8)
+    mask = cv2.resize(mask, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     return mask
 
@@ -61,8 +86,8 @@ def get_all_cells():
 
 def group_cells_by_row(cells):
     rows = {str(r): [] for r in range(1, GRID_SIZE + 1)}
-    for cid in sorted(cells, key=lambda x: (int(x.split("-")[0]), int(x.split("-")[1]))):
-        r, _ = cid.split("-")
+    for cid in sorted(cells, key=lambda x: (int(x.split('-')[0]), int(x.split('-')[1]))):
+        r, _ = cid.split('-')
         rows[r].append(cid)
     return list(rows.values())
 
@@ -71,7 +96,6 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
     vis = np.array(img).copy()
     overlay = vis.copy()
 
-    # 商品マスク輪郭
     if mask is not None:
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(vis, cnts, -1, (255, 255, 255), 2)
@@ -81,11 +105,11 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
             x, y = col * CELL_SIZE, row * CELL_SIZE
             cid = f"{row + 1}-{col + 1}"
             if cid in excluded:
-                color = (255, 100, 100)  # 赤
+                color = (255, 100, 100)
             elif cid in target:
-                color = (0, 255, 0)      # 緑
+                color = (0, 255, 0)
             elif cid in (set(occupied) - set(excluded)):
-                color = (100, 180, 255)  # 青
+                color = (100, 180, 255)
             else:
                 color = None
             if color is not None:
@@ -153,24 +177,32 @@ if img_data is not None:
         excluded_set = set(st.session_state["excluded_cells"])
         target_set   = set(st.session_state["target_cells"])
         final_cells  = (occupied_set - excluded_set) | target_set
-        ratio = round(len(final_cells) / 100 * 100)  # 100 セル固定
+        ratio = round(len(final_cells))  # 100 セル固定なので count==%
         status = "⭕️ 合格" if ratio <= 20 else ("▲ 注意" if ratio <= 30 else "❌ 不合格")
 
-        st.markdown(f"📊 **テキスト占有率: {ratio}%**  {status}")
+                st.markdown(f"📊 **テキスト占有率: {ratio}%**  {status}")
+
         if st.button("🔄 リセット"):
             reset_image()
             st.stop()
 
-        overlay = draw_overlay(img_data, occupied_set, target_set, excluded_set, st.session_state["product_mask"])
+        overlay = draw_overlay(
+            img_data,
+            occupied_set,
+            target_set,
+            excluded_set,
+            st.session_state["product_mask"]
+        )
         st.image(overlay, caption="OCR + セルマップ", width=int(IMAGE_SIZE * 0.8))
 
     # ---------- 右カラム ----------
     with col2:
-        # ---- 除外マス ----
+        # ---- 除外マスフォーム ----
         st.markdown("### 🛠️ 除外マスを選択")
         with st.form("form_exclusion"):
             if "temp_excluded" not in st.session_state:
                 st.session_state["temp_excluded"] = list(excluded_set)
+
             for row_cells in group_cells_by_row(occupied_set):
                 if not row_cells:
                     continue
@@ -183,15 +215,17 @@ if img_data is not None:
                             st.session_state["temp_excluded"].append(cid)
                         if not val and cid in st.session_state["temp_excluded"]:
                             st.session_state["temp_excluded"].remove(cid)
+
             if st.form_submit_button("🔄 除外反映"):
                 st.session_state["excluded_cells"] = list(st.session_state["temp_excluded"])
 
         st.markdown("---")
-        # ---- 対象マス ----
+        # ---- 対象マスフォーム ----
         st.markdown("### 🛠️ 対象マスを選択")
         with st.form("form_target"):
             if "temp_target" not in st.session_state:
                 st.session_state["temp_target"] = list(target_set)
+
             candidate_cells = sorted(get_all_cells() - occupied_set)
             for row_cells in group_cells_by_row(candidate_cells):
                 if not row_cells:
@@ -205,7 +239,9 @@ if img_data is not None:
                             st.session_state["temp_target"].append(cid)
                         if not val and cid in st.session_state["temp_target"]:
                             st.session_state["temp_target"].remove(cid)
+
             if st.form_submit_button("🔄 対象反映"):
                 st.session_state["target_cells"] = list(st.session_state["temp_target"])
+
 else:
     st.info("画像がアップロードされていません。")

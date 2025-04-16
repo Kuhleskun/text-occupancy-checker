@@ -5,28 +5,30 @@ import cv2
 from PIL import Image
 import random
 
-# === ★追加：U²‑NetP 関連 ===
-import os, zipfile
+# === U²‑NetP 関連 ===
+import os
+import zipfile
 from pathlib import Path
 import torch
 from torchvision import transforms
-import gdown
 
 # === 定数 ===
 GRID_SIZE = 10
 CELL_SIZE = 80
 IMAGE_SIZE = 800
 OCCUPANCY_THRESHOLD = 0.05
-PACKAGE_TEXT_THRESHOLD = 0.80          # マスク内率 80% 以上ならパッケージ文字とみなす
+PACKAGE_TEXT_THRESHOLD = 0.80  # マスク内率 80% 以上ならパッケージ文字とみなす
 
-# === ★追加：U²‑NetP ダウンロード先 ===
-MODEL_DIR   = Path(__file__).parent / "models"
+# --- モデルファイルと URL
+MODEL_DIR = Path(__file__).parent / "models"
 MODEL_DIR.mkdir(exist_ok=True)
 U2NETP_PATH = MODEL_DIR / "u2netp.pth"
-U2NETP_URL  = "https://drive.google.com/uc?id=1rbSTGKAE-MTxBYHd-51l2hMOQPT_7EPy"
+GD_URL = "https://drive.google.com/uc?id=1rbSTGKAE-MTxBYHd-51l2hMOQPT_7EPy"
+GH_URL = "https://github.com/xuebinqin/U-2-Net/releases/download/v1.0/u2netp.pth"
+REPO_ZIP_URL = "https://github.com/NathanUA/U-2-Net/archive/refs/heads/master.zip"
 
 st.set_page_config(layout="wide")
-st.title("📏 テキスト占有率チェッカー（var.250415 + mask2）")
+st.title("📏 テキスト占有率チェッカー（var.250415 + mask3）")
 
 # --- ファイルアップローダー用キーの初期化 ---
 if "uploader_key" not in st.session_state:
@@ -36,48 +38,59 @@ if "uploader_key" not in st.session_state:
 @st.cache_resource
 def load_reader():
     return easyocr.Reader(['ja'], gpu=False, recog_network='japanese_g2')
+
 reader = load_reader()
 
-# === ★修正：U²‑NetP をローカルに展開してロード ===
+# === U²‑NetP ダウンロードとロード ===
+
+def ensure_u2netp(path: Path):
+    """重みファイルが無ければダウンロード（gdown→GitHub フォールバック）"""
+    if path.exists():
+        return
+    try:
+        import gdown  # type: ignore
+        gdown.download(GD_URL, str(path), quiet=False)
+    except ModuleNotFoundError:
+        # gdown が無い場合は GitHub Release から取得
+        torch.hub.download_url_to_file(GH_URL, str(path))
+    except Exception as e:
+        raise RuntimeError("U²‑NetP のダウンロードに失敗しました") from e
+
 @st.cache_resource
 def load_u2net():
-    # 1) 重みがなければダウンロード（4.7 MB）
-    if not U2NETP_PATH.exists():
-        gdown.download(U2NETP_URL, str(U2NETP_PATH), quiet=False)
+    ensure_u2netp(U2NETP_PATH)
 
-    # 2) hubconf をローカル展開
     repo = MODEL_DIR / "U-2-Net"
     if not repo.exists():
         zip_path = MODEL_DIR / "u2net.zip"
-        torch.hub.download_url_to_file(
-            "https://github.com/NathanUA/U-2-Net/archive/refs/heads/master.zip",
-            str(zip_path))
+        torch.hub.download_url_to_file(REPO_ZIP_URL, str(zip_path))
         with zipfile.ZipFile(zip_path) as z:
             z.extractall(MODEL_DIR)
 
-    # 3) モデル読み込み（ローカル）
     model = torch.hub.load(str(repo), "u2netp", pretrained=False, source='local')
     model.load_state_dict(torch.load(U2NETP_PATH, map_location='cpu'))
     model.eval()
     return model
 
-# === ★追加：商品マスク生成 ===
+# === 商品マスク生成 ===
+
 def get_product_mask(pil_img):
     model = load_u2net()
     tr = transforms.Compose([
         transforms.Resize((320, 320)),
         transforms.ToTensor(),
-        transforms.Normalize([0.5]*3, [0.5]*3)
+        transforms.Normalize([0.5] * 3, [0.5] * 3)
     ])
     inp = tr(pil_img).unsqueeze(0)
     with torch.no_grad():
         pred = model(inp)[0][0]
     mask = (pred.sigmoid().cpu().numpy() > 0.5).astype(np.uint8)
     mask = cv2.resize(mask, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3,3), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     return mask  # 0/1 マスク
 
 # --- OCR バウンディングボックスとセルの重なり判定 ---
+
 def get_cells_from_box(x1, y1, x2, y2, threshold=OCCUPANCY_THRESHOLD):
     cells = set()
     for row in range(GRID_SIZE):
@@ -90,26 +103,29 @@ def get_cells_from_box(x1, y1, x2, y2, threshold=OCCUPANCY_THRESHOLD):
             inter = iw * ih
             area = (x2 - x1) * (y2 - y1)
             if area > 0 and inter / area >= threshold:
-                cells.add(f"{row+1}-{col+1}")
+                cells.add(f"{row + 1}-{col + 1}")
     return cells
 
 # --- グリッド全体のセル集合 ---
+
 def get_all_cells():
-    return {f"{row}-{col}" for row in range(1, GRID_SIZE+1) for col in range(1, GRID_SIZE+1)}
+    return {f"{row}-{col}" for row in range(1, GRID_SIZE + 1) for col in range(1, GRID_SIZE + 1)}
 
 # --- 行ごとにセルをグループ化（表示用） ---
+
 def group_cells_by_row(cells):
-    d = {str(r): [] for r in range(1, GRID_SIZE+1)}
+    d = {str(r): [] for r in range(1, GRID_SIZE + 1)}
     for c in sorted(cells, key=lambda x: (int(x.split('-')[0]), int(x.split('-')[1]))):
         r, _ = c.split('-')
         d[r].append(c)
     return list(d.values())
 
 # --- オーバーレイ描画 ---
+
 def draw_overlay(img, occupied, target, excluded, mask=None):
     vis = np.array(img).copy()
     overlay = vis.copy()
-    # ★追加：商品マスク輪郭
+    # 商品マスク輪郭
     if mask is not None:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(vis, contours, -1, (255, 255, 255), 2)
@@ -117,22 +133,22 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
     for row in range(GRID_SIZE):
         for col in range(GRID_SIZE):
             x, y = col * CELL_SIZE, row * CELL_SIZE
-            cid = f"{row+1}-{col+1}"
+            cid = f"{row + 1}-{col + 1}"
             if cid in excluded:
                 color = (255, 100, 100)
-                cv2.rectangle(overlay, (x, y), (x+CELL_SIZE, y+CELL_SIZE), color, -1)
+                cv2.rectangle(overlay, (x, y), (x + CELL_SIZE, y + CELL_SIZE), color, -1)
             elif cid in target:
                 color = (0, 255, 0)
-                cv2.rectangle(overlay, (x, y), (x+CELL_SIZE, y+CELL_SIZE), color, -1)
+                cv2.rectangle(overlay, (x, y), (x + CELL_SIZE, y + CELL_SIZE), color, -1)
             elif cid in (set(occupied) - set(excluded)):
                 color = (100, 180, 255)
-                cv2.rectangle(overlay, (x, y), (x+CELL_SIZE, y+CELL_SIZE), color, -1)
-            cv2.rectangle(vis, (x, y), (x+CELL_SIZE, y+CELL_SIZE), (0, 255, 0), 1)
-            cv2.putText(vis, cid, (x+4, y+15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                cv2.rectangle(overlay, (x, y), (x + CELL_SIZE, y + CELL_SIZE), color, -1)
+            cv2.rectangle(vis, (x, y), (x + CELL_SIZE, y + CELL_SIZE), (0, 255, 0), 1)
+            cv2.putText(vis, cid, (x + 4, y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
     return cv2.addWeighted(overlay, 0.5, vis, 0.5, 0)
 
 # --- コールバック ---
+
 def apply_excluded():
     st.session_state["excluded_cells"] = st.session_state.get("temp_excluded", [])
 
@@ -140,9 +156,18 @@ def apply_target():
     st.session_state["target_cells"] = st.session_state.get("temp_target", [])
 
 # --- リセット処理 ---
+
 def reset_image():
-    for key in ["uploaded", "image_data", "product_mask", "occupied_cells",
-                "excluded_cells", "temp_excluded", "target_cells", "temp_target"]:
+    for key in [
+        "uploaded",
+        "image_data",
+        "product_mask",
+        "occupied_cells",
+        "excluded_cells",
+        "temp_excluded",
+        "target_cells",
+        "temp_target",
+    ]:
         st.session_state.pop(key, None)
     st.session_state["uploader_key"] += 1
     st.set_query_params(dummy=str(random.randint(0, 100000)))
@@ -159,7 +184,7 @@ if uploaded:
 # --- 画像アップロード＆OCR処理（初回のみ） ---
 if st.session_state.get("uploaded") and st.session_state.get("image_data") is None:
     img = Image.open(st.session_state["uploaded"]).convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE))
-    product_mask = get_product_mask(img)            # ★追加
+    product_mask = get_product_mask(img)
     arr = np.array(img)
     results = reader.readtext(arr)
 
@@ -170,7 +195,6 @@ if st.session_state.get("uploaded") and st.session_state.get("image_data") is No
         x1, y1 = int(bbox[0][0]), int(bbox[0][1])
         x2, y2 = int(bbox[2][0]), int(bbox[2][1])
 
-        # ★追加：パッケージ文字フィルタ
         region = product_mask[y1:y2, x1:x2]
         if region.size > 0 and region.mean() >= PACKAGE_TEXT_THRESHOLD:
             continue  # パッケージ文字なのでスキップ
@@ -206,11 +230,10 @@ if img_data is not None:
             st.session_state.get("occupied_cells", []),
             st.session_state.get("target_cells", []),
             st.session_state.get("excluded_cells", []),
-            mask=st.session_state.get("product_mask")
+            mask=st.session_state.get("product_mask"),
         )
         st.image(overlay_img, caption="OCR + セルマップ", width=int(IMAGE_SIZE * 0.8))
     with col2:
-        # ===== 除外マス =====
         st.markdown("### 🛠️ 除外マスを選択")
         with st.form("form_exclusion"):
             if "temp_excluded" not in st.session_state:
@@ -222,7 +245,7 @@ if img_data is not None:
                     cols = st.columns([0.1] * len(row_cells), gap="small")
                     for i, cid in enumerate(row_cells):
                         with cols[i]:
-                            checked = cid in st.session_state.get("temp_excluded", [])
+                            checked = cid in st.session_state["temp_excluded"]
                             val = st.checkbox(cid, value=checked, key=f"exclude_{cid}")
                             if val and cid not in st.session_state["temp_excluded"]:
                                 st.session_state["temp_excluded"].append(cid)
@@ -230,8 +253,8 @@ if img_data is not None:
                                 st.session_state["temp_excluded"].remove(cid)
             if st.form_submit_button("🔄 除外反映"):
                 apply_excluded()
+
         st.markdown("---")
-        # ===== 対象マス =====
         st.markdown("### 🛠️ 対象マスを選択")
         all_cells = get_all_cells()
         candidate_cells = sorted(all_cells - set(st.session_state.get("occupied_cells", [])))

@@ -17,7 +17,7 @@ OCCUPANCY_THRESHOLD = 0.05
 PACKAGE_TEXT_THRESHOLD = 0.80  # マスク内率 80%以上 → パッケージ文字とみなす
 
 st.set_page_config(layout="wide")
-st.title("📏 テキスト占有率チェッカー（var.250415 + mask_onnx_fix）")
+st.title("📏 テキスト占有率チェッカー（var.250415 + mask_onnx_fix2）")
 
 # --- ファイルアップローダー用キーの初期化 ---
 if "uploader_key" not in st.session_state:
@@ -69,8 +69,8 @@ def get_all_cells():
 
 def group_cells_by_row(cells):
     d = {str(r): [] for r in range(1, GRID_SIZE + 1)}
-    for c in sorted(cells, key=lambda x: (int(x.split("-")[0]), int(x.split("-")[1]))):
-        r, _ = c.split("-")
+    for c in sorted(cells, key=lambda x: (int(x.split('-')[0]), int(x.split('-')[1]))):
+        r, _ = c.split('-')
         d[r].append(c)
     return list(d.values())
 
@@ -188,4 +188,8 @@ if img_data is not None:
         st.image(overlay_img, caption="OCR + セルマップ", width=int(IMAGE_SIZE * 0.8))
 
     with col2:
-        # ===== 除
+        # ===== 除外マスフォーム =====
+        st.markdown("### 🛠️ 除外マスを選択")
+        with st.form("form_exclusion"):
+            if "temp_excluded" not in st.session_state:
+                st.session_state["temp_excluded"] = list(st.session_state.get("excluded_cells

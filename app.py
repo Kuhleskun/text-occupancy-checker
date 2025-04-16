@@ -192,4 +192,24 @@ if img_data is not None:
         st.markdown("### 🛠️ 除外マスを選択")
         with st.form("form_exclusion"):
             if "temp_excluded" not in st.session_state:
-                st.session_state["temp_excluded"] = list(st.session_state.get("excluded_cells
+                with st.form("form_exclusion"):
+    if "temp_excluded" not in st.session_state:
+        st.session_state["temp_excluded"] = list(
+            st.session_state.get("excluded_cells", [])
+        )
+    for row_cells in group_cells_by_row(st.session_state.get("occupied_cells", [])):
+        if not row_cells:
+            continue
+        cols = st.columns([0.1] * len(row_cells), gap="small")
+        for i, cid in enumerate(row_cells):
+            with cols[i]:
+                checked = cid in st.session_state["temp_excluded"]
+                if st.checkbox(cid, value=checked, key=f"exclude_{cid}"):
+                    if cid not in st.session_state["temp_excluded"]:
+                        st.session_state["temp_excluded"].append(cid)
+                else:
+                    if cid in st.session_state["temp_excluded"]:
+                        st.session_state["temp_excluded"].remove(cid)
+    if st.form_submit_button("🔄 除外反映"):
+        apply_excluded()
+

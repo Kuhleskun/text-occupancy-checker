@@ -16,14 +16,23 @@ st.set_page_config(layout="wide")
 MODEL_PATH = Path("models/u2netp.pth")
 st.write("models/u2netp.pth がデプロイ先に存在するか？", MODEL_PATH.exists())
 
-st.title("📏 テキスト占有率チェッカー（完全版 / U2NetP）")
+# モデルファイル存在チェックのすぐ下に追加
+try:
+    with open(MODEL_PATH, "rb") as f:
+        header = f.read(8)
+    st.write("u2netp.pth ヘッダー 8 バイト:", header)
+except Exception as e:
+    st.error(f"モデルファイルが読めません: {e}")
+
+
+st.title("📏 テキスト占有率チェッカー（完全版 / U2NetP0417）")
 
 GRID_SIZE = 10
 CELL_SIZE = 80
 IMAGE_SIZE = 800
 OCCUPANCY_THRESHOLD = 0.05
 PACKAGE_TEXT_THRESHOLD = 0.80
-MODEL_PATH = Path("models/u2netp.pth")
+
 
 @st.cache_resource
 def load_reader():

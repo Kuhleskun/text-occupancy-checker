@@ -6,12 +6,16 @@ import random
 import torch
 from PIL import Image
 from pathlib import Path
-MODEL_PATH = Path("models/u2netp.pth")
-st.write("models/u2netp.pth が存在するか？", MODEL_PATH.exists())
 from model.u2netp import U2NETP
 from torchvision import transforms
 
+# ←─── ここから Streamlit の最初のコマンド
 st.set_page_config(layout="wide")
+
+# モデルファイル存在チェック（st.*コマンドなので set_page_config の次に）
+MODEL_PATH = Path("models/u2netp.pth")
+st.write("models/u2netp.pth がデプロイ先に存在するか？", MODEL_PATH.exists())
+
 st.title("📏 テキスト占有率チェッカー（完全版 / U2NetP）")
 
 GRID_SIZE = 10

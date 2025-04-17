@@ -6,6 +6,8 @@ import random
 import torch
 from PIL import Image
 from pathlib import Path
+MODEL_PATH = Path("models/u2netp.pth")
+st.write("models/u2netp.pth が存在するか？", MODEL_PATH.exists())
 from model.u2netp import U2NETP
 from torchvision import transforms
 

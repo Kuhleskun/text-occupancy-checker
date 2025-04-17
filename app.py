@@ -202,7 +202,7 @@ if img_data:
             if "temp_excluded" not in st.session_state:
                 st.session_state["temp_excluded"] = list(exc)
             for row_cells in group_cells_by_row(occ):
-                cols = st.columns(len(row_cells), gap="small")
+                cols = st.columns([1] * len(row_cells), gap="small")
                 for i, cid in enumerate(row_cells):
                     with cols[i]:
                         checked = cid in st.session_state["temp_excluded"]
@@ -221,7 +221,7 @@ if img_data:
                 st.session_state["temp_target"] = list(tgt)
             candidates = sorted(get_all_cells() - occ)
             for row_cells in group_cells_by_row(candidates):
-                cols = st.columns(len(row_cells), gap="small")
+                cols = st.columns([1] * len(row_cells), gap="small")
                 for i, cid in enumerate(row_cells):
                     with cols[i]:
                         checked = cid in st.session_state["temp_target"]

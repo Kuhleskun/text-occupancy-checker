@@ -101,8 +101,15 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
     vis = np.array(img).copy()
     overlay = vis.copy()
     if mask is not None:
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # (1) Python リストやセッション保存後の形でも扱えるように NumPy 配列に復元
+        m = np.array(mask, dtype=np.uint8)
+        # (2) バイナリ(0/1)の場合は 0/255 に変換
+        if m.max() <= 1:
+            m = (m * 255).astype(np.uint8)
+        # (3) 輪郭検出／描画
+        contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(vis, contours, -1, (255, 255, 255), 2)
+    # mask ブロックのインデントが一段深く、その後は元と同じレベルに戻ります
     for row in range(GRID_SIZE):
         for col in range(GRID_SIZE):
             x, y = col * CELL_SIZE, row * CELL_SIZE

@@ -25,11 +25,20 @@ def load_reader():
 
 @st.cache_resource
 def load_u2netp():
-    if not MODEL_PATH.exists():
-        st.error("models/u2netp.pth が見つかりません。")
-        st.stop()
+    # checkpoint をロード
+    state = torch.load(MODEL_PATH, map_location="cpu")
+    # DataParallel 用の 'module.' プレフィックスを剥がす
+    new_state = {k.replace("module.", ""): v for k, v in state.items()}
+
     model = U2NETP(3, 1)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    try:
+        # strict=False で読み込み、例外があればキャッチ
+        model.load_state_dict(new_state, strict=False)
+    except RuntimeError as e:
+        st.error("❗️ load_state_dict でエラーが発生しました:")
+        st.error(str(e))
+        st.stop()
+
     model.eval()
     return model
 

@@ -105,7 +105,7 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
         # --- デバッグ出力: mask の型・shape・dtype・min/max を画面に表示 ---
         try:
             m = np.array(mask)
-            st.write(f"DEBUG mask type: {type(mask)}, dtype: {m.dtype}, shape: {m.shape}, min/max: {m.min()}/{m.max()}")
+
         except Exception as e:
             st.write(f"DEBUG mask conversion error: {e}")
 
@@ -201,18 +201,28 @@ if img_data:
         with st.form("form_exclusion"):
             if "temp_excluded" not in st.session_state:
                 st.session_state["temp_excluded"] = list(exc)
+
             for row_cells in group_cells_by_row(occ):
+                if not row_cells:
+                    continue
                 cols = st.columns(len(row_cells))
                 for i, cid in enumerate(row_cells):
                     with cols[i]:
                         checked = cid in st.session_state["temp_excluded"]
-                        val = st.checkbox(cid, value=checked, key=f"exclude_{cid}")
+                        val = st.checkbox(
+                            cid,
+                            value=checked,
+                            key=f"exclude_{cid}"
+                        )
                         if val and cid not in st.session_state["temp_excluded"]:
                             st.session_state["temp_excluded"].append(cid)
                         elif not val and cid in st.session_state["temp_excluded"]:
                             st.session_state["temp_excluded"].remove(cid)
+
             if st.form_submit_button("🔄 除外反映"):
-                st.session_state["excluded_cells"] = list(st.session_state["temp_excluded"])
+                st.session_state["excluded_cells"] = list(
+                    st.session_state["temp_excluded"]
+                )
 
         st.markdown("---")
         st.markdown("### 🛠️ 対象マスを選択")
@@ -221,16 +231,27 @@ if img_data:
                 st.session_state["temp_target"] = list(tgt)
             candidates = sorted(get_all_cells() - occ)
             for row_cells in group_cells_by_row(candidates):
+                # ★空の行はスキップ
+                if not row_cells:
+                    continue
                 cols = st.columns(len(row_cells))
                 for i, cid in enumerate(row_cells):
                     with cols[i]:
                         checked = cid in st.session_state["temp_target"]
-                        val = st.checkbox(cid, value=checked, key=f"target_{cid}")
+                        val = st.checkbox(
+                            cid,
+                            value=checked,
+                            key=f"target_{cid}"
+                        )
                         if val and cid not in st.session_state["temp_target"]:
                             st.session_state["temp_target"].append(cid)
                         elif not val and cid in st.session_state["temp_target"]:
                             st.session_state["temp_target"].remove(cid)
+
             if st.form_submit_button("🔄 対象反映"):
-                st.session_state["target_cells"] = list(st.session_state["temp_target"])
+                st.session_state["target_cells"] = list(
+                    st.session_state["temp_target"]
+                )
+
 else:
     st.info("画像がアップロードされていません。")

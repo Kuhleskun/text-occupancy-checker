@@ -351,7 +351,8 @@ class U2NET(nn.Module):
         self.side5 = nn.Conv2d(512,out_ch,3,padding=1)
         self.side6 = nn.Conv2d(512,out_ch,3,padding=1)
 
-        self.outconv = nn.Conv2d(6*out_ch,out_ch,1)
+        # 公式チェックポイントに合わせ、サイド出力 6 チャネルをマージ
+        self.outconv = nn.Conv2d(6, out_ch, 1)
 
     def forward(self,x):
 

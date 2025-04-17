@@ -100,6 +100,7 @@ def group_cells_by_row(cells):
 def draw_overlay(img, occupied, target, excluded, mask=None):
     vis = np.array(img).copy()
     overlay = vis.copy()
+
     if mask is not None:
         # --- デバッグ出力: mask の型・shape・dtype・min/max を画面に表示 ---
         try:
@@ -108,7 +109,11 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
         except Exception as e:
             st.write(f"DEBUG mask conversion error: {e}")
 
-        # --- mask を必ず uint8 の 2D 配列に整形 ---
+        # --- mask を必ず 2 次元 uint8 配列に整形 ---
+        # もし 3 次元 (H, W, C) なら最初のチャンネルだけ使う
+        if m.ndim > 2:
+            m = m[:, :, 0]
+        # uint8 に変換
         m = m.astype(np.uint8)
         # 0/1 の場合は 0/255 にスケール
         if m.max() <= 1:
@@ -135,6 +140,7 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
             cv2.rectangle(vis, (x, y), (x + CELL_SIZE, y + CELL_SIZE), (0, 255, 0), 1)
             cv2.putText(vis, cid, (x + 4, y + 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
     return cv2.addWeighted(overlay, 0.5, vis, 0.5, 0)
 
 def reset_image():

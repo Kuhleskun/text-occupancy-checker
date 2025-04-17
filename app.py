@@ -101,15 +101,24 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
     vis = np.array(img).copy()
     overlay = vis.copy()
     if mask is not None:
-        # (1) Python リストやセッション保存後の形でも扱えるように NumPy 配列に復元
-        m = np.array(mask, dtype=np.uint8)
-        # (2) バイナリ(0/1)の場合は 0/255 に変換
+        # --- デバッグ出力: mask の型・shape・dtype・min/max を画面に表示 ---
+        try:
+            m = np.array(mask)
+            st.write(f"DEBUG mask type: {type(mask)}, dtype: {m.dtype}, shape: {m.shape}, min/max: {m.min()}/{m.max()}")
+        except Exception as e:
+            st.write(f"DEBUG mask conversion error: {e}")
+
+        # --- mask を必ず uint8 の 2D 配列に整形 ---
+        m = m.astype(np.uint8)
+        # 0/1 の場合は 0/255 にスケール
         if m.max() <= 1:
             m = (m * 255).astype(np.uint8)
-        # (3) 輪郭検出／描画
+
+        # --- 輪郭検出／描画 ---
         contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(vis, contours, -1, (255, 255, 255), 2)
-    # mask ブロックのインデントが一段深く、その後は元と同じレベルに戻ります
+
+    # 以下は元のまま
     for row in range(GRID_SIZE):
         for col in range(GRID_SIZE):
             x, y = col * CELL_SIZE, row * CELL_SIZE
@@ -124,7 +133,8 @@ def draw_overlay(img, occupied, target, excluded, mask=None):
             if color:
                 cv2.rectangle(overlay, (x, y), (x + CELL_SIZE, y + CELL_SIZE), color, -1)
             cv2.rectangle(vis, (x, y), (x + CELL_SIZE, y + CELL_SIZE), (0, 255, 0), 1)
-            cv2.putText(vis, cid, (x + 4, y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            cv2.putText(vis, cid, (x + 4, y + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
     return cv2.addWeighted(overlay, 0.5, vis, 0.5, 0)
 
 def reset_image():
